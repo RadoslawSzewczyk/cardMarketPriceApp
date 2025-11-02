@@ -18,6 +18,11 @@ import java.net.URLEncoder
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
+import android.content.Context
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.platform.LocalContext
+import coil.request.ImageRequest
+import coil.compose.AsyncImage
 
 
 data class CardData(
@@ -120,13 +125,7 @@ fun CardPriceApp() {
                     modifier = Modifier.fillMaxWidth()
                 )
                 Spacer(Modifier.height(16.dp))
-                AsyncImage(
-                    model = data.imageUrl,
-                    contentDescription = data.name,
-                    modifier = Modifier
-                        .fillMaxWidth(0.7f)
-                        .aspectRatio(0.717f)
-                )
+                CardImage(url = data.imageUrl, description = data.name)
                 Spacer(Modifier.height(16.dp))
                 Text(
                     text = data.priceInfo,
@@ -183,33 +182,62 @@ fun buildUrlForTag(tag: String): String {
     return "https://www.cardmarket.com/en/Pokemon/Products/Search?category=-1&searchString=$encoded&searchMode=v1"
 }
 
-fun parsePriceFromDoc(doc: Document): CardData {
-    if (doc.title().contains("Search", ignoreCase = true)) {
-        throw Exception("Tag was not specific. Landed on a search results page.")
+suspend fun fetchHtmlAbsolute(url: String): String {
+    val client = OkHttpClient()
+
+    val request = Request.Builder()
+        .url(url)
+        .header(
+            "User-Agent",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+                    "(KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"
+        )
+        .header("Referer", "https://www.google.com")
+        .build()
+
+    client.newCall(request).execute().use { response ->
+        if (!response.isSuccessful) throw Exception("HTTP error ${response.code}")
+        return response.body?.string() ?: throw Exception("Empty response body")
+    }
+}
+
+
+suspend fun parsePriceFromDoc(doc: Document): CardData {
+    val firstResultLink = doc.selectFirst(".table-body a[href*='/en/Pokemon/Products/Singles/']")
+        ?.attr("href")
+
+    if (firstResultLink != null && !firstResultLink.contains("Search")) {
+        println("DEBUG: On search page → following first result: $firstResultLink")
+        val productUrl = "https://www.cardmarket.com$firstResultLink"
+        val productHtml = fetchHtmlAbsolute(productUrl)
+        return parsePriceFromDoc(Jsoup.parse(productHtml))
     }
 
-    val imgEl = doc.selectFirst("img.image-card-image")
-    val cardName = imgEl?.attr("alt")
-        ?.split(" - ")?.firstOrNull()
-        ?: "Name not found"
-    val imageUrl = imgEl?.attr("src") ?: ""
+    val cardName = doc.selectFirst("h1")?.text()?.trim() ?: "Name not found"
 
-    val fromPriceEl = doc.selectFirst("dt:containsOwn(From) + dd")
-    val fromPrice = fromPriceEl?.text()?.trim() ?: "N/A"
+    var imageUrl = ""
+    val imageSelectors = listOf(
+        "img.is-front[src*='product-images.s3.cardmarket.com']",
+        "div.image.card-image img[src*='product-images.s3.cardmarket.com']",
+        "meta[property=og:image]"
+    )
 
-    val trendPriceEl = doc.selectFirst("dt:containsOwn(Price Trend) + dd span")
-    val trendPrice = trendPriceEl?.text()?.trim() ?: "N/A"
-
-    val avg30El = doc.selectFirst("dt:containsOwn(30-days average price) + dd span")
-    val avg30Price = avg30El?.text()?.trim() ?: "N/A"
-
-    if (fromPrice == "N/A" && trendPrice == "N/A") {
-        val noResults = doc.selectFirst(".no-results-text")
-        if (noResults != null) {
-            throw Exception("No product found for tag.")
+    for (sel in imageSelectors) {
+        val el = doc.selectFirst(sel)
+        if (el != null) {
+            imageUrl = if (sel.startsWith("meta")) el.attr("content") else el.attr("src")
+            if (imageUrl.isNotBlank() && !imageUrl.contains("transparent.gif")) break
         }
-        throw Exception("Price not found on page. CSS selectors might be outdated.")
     }
+
+    if (imageUrl.startsWith("//")) imageUrl = "https:$imageUrl"
+    else if (imageUrl.startsWith("/")) imageUrl = "https://www.cardmarket.com$imageUrl"
+
+    println("DEBUG imageUrl (final) = $imageUrl")
+
+    val fromPrice = doc.selectFirst("dt:containsOwn(From) + dd")?.text()?.trim() ?: "N/A"
+    val trendPrice = doc.selectFirst("dt:containsOwn(Price Trend) + dd span")?.text()?.trim() ?: "N/A"
+    val avg30Price = doc.selectFirst("dt:matchesOwn(30-days average price) + dd span")?.text()?.trim() ?: "N/A"
 
     val priceString = """
         From: $fromPrice
@@ -223,3 +251,42 @@ fun parsePriceFromDoc(doc: Document): CardData {
         priceInfo = priceString
     )
 }
+
+
+
+@Composable
+fun CardImage(url: String, description: String) {
+    if (url.isBlank()) return
+
+    val ctx = LocalContext.current
+
+    val imageLoader = remember {
+        coil.ImageLoader.Builder(ctx)
+            .okHttpClient {
+                okhttp3.OkHttpClient.Builder()
+                    .addInterceptor { chain ->
+                        val request = chain.request().newBuilder()
+                            .header("Referer", "https://www.cardmarket.com")
+                            .header(
+                                "User-Agent",
+                                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+                                        "(KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"
+                            )
+                            .build()
+                        chain.proceed(request)
+                    }
+                    .build()
+            }
+            .build()
+    }
+
+    AsyncImage(
+        model = url,
+        contentDescription = description,
+        imageLoader = imageLoader,
+        modifier = Modifier
+            .fillMaxWidth(0.7f)
+            .aspectRatio(0.717f)
+    )
+}
+
