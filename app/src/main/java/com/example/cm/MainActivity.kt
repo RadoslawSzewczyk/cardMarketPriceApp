@@ -212,17 +212,12 @@ fun ScraperWebView(
 }
 
 
-/**
- * Builds the CardMarket search URL using the /Products/Search endpoint.
- */
+
 fun buildUrlForTag(tag: String): String {
     val encoded = URLEncoder.encode(tag, "UTF-8")
     return "https://www.cardmarket.com/en/Pokemon/Products/Search?category=-1&searchString=$encoded&searchMode=v1"
 }
 
-/**
- * Parses the prices from the product detail page Document.
- */
 fun parsePriceFromDoc(doc: Document): String {
     if (doc.title().contains("Search", ignoreCase = true)) {
         return "Error: Tag was not specific. Landed on a search results page."
@@ -231,10 +226,10 @@ fun parsePriceFromDoc(doc: Document): String {
     val fromPriceEl = doc.selectFirst("dt:containsOwn(From) + dd")
     val fromPrice = fromPriceEl?.text()?.trim() ?: "N/A"
 
-    val trendPriceEl = doc.selectFirst("dt:containsOwn(Price Trend) + span")
+    val trendPriceEl = doc.selectFirst("dt:containsOwn(Price Trend) + dd span")
     val trendPrice = trendPriceEl?.text()?.trim() ?: "N/A"
 
-    val avg30El = doc.selectFirst("dt:containsOwn(30-days average price) + span")
+    val avg30El = doc.selectFirst("dt:containsOwn(30-days average price) + dd span")
     val avg30Price = avg30El?.text()?.trim() ?: "N/A"
 
     if (fromPrice == "N/A" && trendPrice == "N/A") {
